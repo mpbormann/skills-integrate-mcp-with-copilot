@@ -6,6 +6,10 @@ for extracurricular activities at Mergington High School.
 """
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from passlib.hash import bcrypt
+from jose import jwt
+import datetime
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -130,3 +134,60 @@ def unregister_from_activity(activity_name: str, email: str):
     # Remove student
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+# Simple in-memory user store (replace with DB later)
+users = {}
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+
+@app.post("/auth/signup")
+def auth_signup(payload: SignupRequest):
+    email = payload.email.lower()
+    if email in users:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    password_hash = bcrypt.hash(payload.password)
+    users[email] = {
+        "email": email,
+        "password_hash": password_hash,
+        "first_name": payload.first_name,
+        "last_name": payload.last_name
+    }
+    return {"message": "User created", "email": email}
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def auth_login(payload: LoginRequest):
+    email = payload.email.lower()
+    user = users.get(email)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid credentials")
+
+    if not bcrypt.verify(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Invalid credentials")
+
+    expire = datetime.datetime.utcnow() + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = jwt.encode({"sub": email, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "token_type": "bearer"}
